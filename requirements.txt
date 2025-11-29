@@ -4,7 +4,6 @@ langchain-google-genai
 google-generativeai
 python-dotenv
 pydantic
-PyPDF2
 pdfplumber
 scikit-learn
 sentence-transformers
