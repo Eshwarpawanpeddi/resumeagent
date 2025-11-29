@@ -1,9 +1,8 @@
 streamlit
-langchain
-langchain-google-genai
-google-generativeai
+langchain>=0.3.0
+langchain-google-genai>=2.0.0
+langchain-community>=0.3.0
 python-dotenv
-pydantic
 pdfplumber
 scikit-learn
 sentence-transformers
