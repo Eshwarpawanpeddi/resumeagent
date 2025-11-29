@@ -9,7 +9,6 @@ import numpy as np
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 import re
-from io import StringIO
 import json
 
 load_dotenv()
@@ -41,13 +40,16 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # Initialize models
+# FIX 1: Only cache the embedding model (shared resource). 
+# Do NOT cache the LLM because it needs the specific user's API key.
 @st.cache_resource
-def load_models():
-    llm = ChatGoogleGenerativeAI(model="gemini-pro", temperature=0.7)
-    embedder = SentenceTransformer('all-MiniLM-L6-v2')
-    return llm, embedder
+def load_embedder():
+    return SentenceTransformer('all-MiniLM-L6-v2')
 
-llm, embedder = load_models()
+def get_llm(api_key):
+    return ChatGoogleGenerativeAI(model="gemini-pro", temperature=0.7, google_api_key=api_key)
+
+embedder = load_embedder()
 
 # Utility functions
 def extract_text_from_pdf(pdf_file):
@@ -55,7 +57,10 @@ def extract_text_from_pdf(pdf_file):
     with pdfplumber.open(pdf_file) as pdf:
         text = ""
         for page in pdf.pages:
-            text += page.extract_text() + "\n"
+            # FIX 2: Check if extracted text is None (handles scanned PDFs safely)
+            page_text = page.extract_text()
+            if page_text:
+                text += page_text + "\n"
     return text
 
 def extract_candidate_info(resume_text, llm):
@@ -136,7 +141,7 @@ def calculate_match_score(resume_text, jd_text, candidate_info, job_req):
     # Embedding similarity
     resume_embedding = embedder.encode(resume_text[:1000], convert_to_tensor=True)
     jd_embedding = embedder.encode(jd_text[:1000], convert_to_tensor=True)
-    embedding_score = float(cosine_similarity([resume_embedding], [jd_embedding])[0][0]) * 100
+    embedding_score = float(cosine_similarity([resume_embedding.cpu().numpy()], [jd_embedding.cpu().numpy()])[0][0]) * 100
     
     # Keyword matching
     candidate_skills = set([s.lower() for s in candidate_info.get("key_skills", [])])
@@ -199,8 +204,7 @@ with st.sidebar:
     st.title("Configuration")
     st.info("📌 This agent screens resumes against job descriptions using AI embeddings and semantic matching.")
     api_key = st.text_input("Google API Key", type="password", help="Get from https://makersuite.google.com/app/apikey")
-    if api_key:
-        os.environ["GOOGLE_API_KEY"] = api_key
+    # FIX 3: Removed os.environ setting. We will pass the key directly to the LLM.
 
 # Main layout
 col1, col2 = st.columns(2)
@@ -235,10 +239,13 @@ if st.button("🚀 Start Screening", type="primary", use_container_width=True):
         st.error("❌ Please provide a job description")
     elif not resume_files:
         st.error("❌ Please upload at least one resume")
-    elif not os.environ.get("GOOGLE_API_KEY"):
+    elif not api_key:
         st.error("❌ Please provide Google API Key in sidebar")
     else:
         st.success("✓ Processing started...")
+        
+        # Initialize LLM with user's key
+        llm = get_llm(api_key)
         
         # Extract job requirements
         with st.spinner("📖 Analyzing job description..."):
