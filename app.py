@@ -3,8 +3,7 @@ import pdfplumber
 import os
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.prompts import PromptTemplate
-import pandas as pd
+from langchain_core.prompts import PromptTemplateimport pandas as pd
 import numpy as np
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
