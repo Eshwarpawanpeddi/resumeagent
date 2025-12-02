@@ -2,69 +2,158 @@ import streamlit as st
 import pdfplumber
 import os
 from dotenv import load_dotenv
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langchain_core.prompts import PromptTemplate
 import pandas as pd
-import numpy as np
-from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 import re
 import json
 
+# Load environment variables
 load_dotenv()
 
 # Configure Streamlit
 st.set_page_config(
-    page_title="AI Resume Screening Agent",
-    page_icon="📄",
+    page_title="ResumeAI - Intelligent Screening",
+    page_icon="✨",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
+# --- MODERN UI STYLING ---
 st.markdown("""
     <style>
-    .header {
-        font-size: 2.5em;
-        font-weight: bold;
-        color: #1f77b4;
-        margin-bottom: 10px;
+    /* Import Font */
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
+    
+    /* General Settings */
+    html, body, [class*="css"] {
+        font-family: 'Inter', sans-serif;
+        color: #2c3e50;
     }
-    .metric-card {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        padding: 20px;
-        border-radius: 10px;
+    
+    /* App Background */
+    .stApp {
+        background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+    }
+    
+    /* Hero Section */
+    .hero-container {
+        text-align: center;
+        padding: 2rem 0;
+        animation: fadeIn 1.2s ease-in-out;
+    }
+    
+    .main-title {
+        font-size: 3.5rem;
+        font-weight: 800;
+        background: linear-gradient(120deg, #2980b9, #8e44ad);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        margin-bottom: 0.5rem;
+    }
+    
+    .subtitle {
+        font-size: 1.2rem;
+        color: #57606f;
+        margin-bottom: 2rem;
+    }
+    
+    /* Card Container Style */
+    .glass-card {
+        background: rgba(255, 255, 255, 0.95);
+        backdrop-filter: blur(10px);
+        border-radius: 20px;
+        padding: 25px;
+        box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.07);
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        margin-bottom: 20px;
+        transition: transform 0.3s ease;
+    }
+    
+    .glass-card:hover {
+        transform: translateY(-5px);
+    }
+    
+    /* Section Headers */
+    .section-header {
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: #2c3e50;
+        margin-bottom: 15px;
+        border-bottom: 2px solid #3498db;
+        display: inline-block;
+        padding-bottom: 5px;
+    }
+    
+    /* Custom Button */
+    .stButton>button {
+        width: 100%;
+        background: linear-gradient(90deg, #4b6cb7 0%, #182848 100%);
         color: white;
-        margin: 10px 0;
+        border: none;
+        padding: 0.7rem;
+        border-radius: 12px;
+        font-weight: 600;
+        font-size: 1.1rem;
+        transition: all 0.3s ease;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+    }
+    
+    .stButton>button:hover {
+        transform: scale(1.02);
+        box-shadow: 0 6px 20px rgba(0,0,0,0.15);
+    }
+    
+    /* Sidebar Styling */
+    [data-testid="stSidebar"] {
+        background-color: #ffffff;
+        border-right: 1px solid #e1e4e8;
+    }
+    
+    /* Metric Cards */
+    div[data-testid="metric-container"] {
+        background: white;
+        padding: 15px;
+        border-radius: 12px;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+        border-left: 4px solid #3498db;
+    }
+    
+    /* DataFrame Styling */
+    [data-testid="stDataFrame"] {
+        background: white;
+        padding: 10px;
+        border-radius: 15px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+    }
+    
+    /* Animations */
+    @keyframes fadeIn {
+        0% { opacity: 0; transform: translateY(20px); }
+        100% { opacity: 1; transform: translateY(0); }
     }
     </style>
     """, unsafe_allow_html=True)
 
-# Initialize models
-# FIX 1: Only cache the embedding model (shared resource). 
-# Do NOT cache the LLM because it needs the specific user's API key.
-@st.cache_resource
-def load_embedder():
-    return SentenceTransformer('all-MiniLM-L6-v2')
+# --- UTILITY FUNCTIONS (Optimized) ---
 
-def get_llm(api_key):
-    return ChatGoogleGenerativeAI(model="gemini-pro", temperature=0.7, google_api_key=api_key)
-
-embedder = load_embedder()
-
-# Utility functions
 def extract_text_from_pdf(pdf_file):
-    """Extract text from PDF file"""
-    with pdfplumber.open(pdf_file) as pdf:
-        text = ""
-        for page in pdf.pages:
-            # FIX 2: Check if extracted text is None (handles scanned PDFs safely)
-            page_text = page.extract_text()
-            if page_text:
-                text += page_text + "\n"
-    return text
+    """Extract text from PDF file safely."""
+    try:
+        with pdfplumber.open(pdf_file) as pdf:
+            text = ""
+            for page in pdf.pages:
+                page_text = page.extract_text()
+                if page_text:
+                    text += page_text + "\n"
+        return text
+    except Exception as e:
+        st.error(f"Error reading PDF {pdf_file.name}: {e}")
+        return ""
 
 def extract_candidate_info(resume_text, llm):
-    """Extract candidate info using LLM"""
+    """Extract candidate info using LLM."""
     prompt = PromptTemplate(
         input_variables=["resume"],
         template="""Extract the following information from the resume in JSON format:
@@ -72,7 +161,7 @@ def extract_candidate_info(resume_text, llm):
     "name": "candidate name",
     "email": "email if present",
     "phone": "phone if present",
-    "experience_years": "total years of experience",
+    "experience_years": "total years of experience (numeric or string)",
     "key_skills": ["skill1", "skill2", ...],
     "education": "degree and institution"
 }}
@@ -80,29 +169,29 @@ def extract_candidate_info(resume_text, llm):
 Resume:
 {resume}
 
-Return only valid JSON."""
+Return ONLY valid JSON."""
     )
     
     try:
-        result = llm.invoke(prompt.format(resume=resume_text[:2000]))
-        # Parse JSON from response
-        json_match = re.search(r'\{[\s\S]*\}', result.content)
-        if json_match:
-            return json.loads(json_match.group())
-    except:
-        pass
-    
-    return {
-        "name": "Unknown",
-        "email": "N/A",
-        "phone": "N/A",
-        "experience_years": "N/A",
-        "key_skills": [],
-        "education": "N/A"
-    }
+        result = llm.invoke(prompt.format(resume=resume_text[:4000]))
+        content = result.content.strip()
+        if "```json" in content:
+            content = content.split("```json")[1].split("```")[0]
+        elif "```" in content:
+            content = content.split("```")[1].split("```")[0]
+            
+        return json.loads(content)
+    except Exception as e:
+        return {
+            "name": "Unknown",
+            "email": "N/A",
+            "experience_years": "N/A",
+            "key_skills": [],
+            "education": "N/A"
+        }
 
 def extract_job_requirements(jd_text, llm):
-    """Extract job requirements from JD"""
+    """Extract job requirements from JD."""
     prompt = PromptTemplate(
         input_variables=["jd"],
         template="""Extract job requirements from this job description in JSON format:
@@ -117,33 +206,34 @@ def extract_job_requirements(jd_text, llm):
 Job Description:
 {jd}
 
-Return only valid JSON."""
+Return ONLY valid JSON."""
     )
     
     try:
-        result = llm.invoke(prompt.format(jd=jd_text[:2000]))
-        json_match = re.search(r'\{[\s\S]*\}', result.content)
-        if json_match:
-            return json.loads(json_match.group())
+        result = llm.invoke(prompt.format(jd=jd_text[:4000]))
+        content = result.content.strip()
+        if "```json" in content:
+            content = content.split("```json")[1].split("```")[0]
+        elif "```" in content:
+            content = content.split("```")[1].split("```")[0]
+        return json.loads(content)
     except:
-        pass
-    
-    return {
-        "position": "Unknown",
-        "required_skills": [],
-        "preferred_skills": [],
-        "experience_required": "N/A",
-        "education_required": "N/A"
-    }
+        return {
+            "position": "Unknown",
+            "required_skills": [],
+            "preferred_skills": [],
+            "experience_required": "N/A"
+        }
 
-def calculate_match_score(resume_text, jd_text, candidate_info, job_req):
-    """Calculate match score using embeddings and keyword matching"""
-    # Embedding similarity
-    resume_embedding = embedder.encode(resume_text[:1000], convert_to_tensor=True)
-    jd_embedding = embedder.encode(jd_text[:1000], convert_to_tensor=True)
-    embedding_score = float(cosine_similarity([resume_embedding.cpu().numpy()], [jd_embedding.cpu().numpy()])[0][0]) * 100
+def calculate_match_score(resume_text, jd_text, candidate_info, job_req, embeddings_model):
+    """Calculate match score using Cloud Embeddings and Keyword Matching."""
+    try:
+        resume_vec = embeddings_model.embed_query(resume_text[:2000])
+        jd_vec = embeddings_model.embed_query(jd_text[:2000])
+        embedding_score = float(cosine_similarity([resume_vec], [jd_vec])[0][0]) * 100
+    except Exception as e:
+        embedding_score = 0
     
-    # Keyword matching
     candidate_skills = set([s.lower() for s in candidate_info.get("key_skills", [])])
     required_skills = set([s.lower() for s in job_req.get("required_skills", [])])
     preferred_skills = set([s.lower() for s in job_req.get("preferred_skills", [])])
@@ -158,15 +248,14 @@ def calculate_match_score(resume_text, jd_text, candidate_info, job_req):
     else:
         preferred_match = 0
     
-    # Weighted score
     final_score = (embedding_score * 0.4) + (required_match * 0.5) + (preferred_match * 0.1)
     return min(final_score, 100)
 
 def generate_match_analysis(resume_text, jd_text, candidate_info, job_req, match_score, llm):
-    """Generate detailed match analysis"""
+    """Generate detailed match analysis."""
     prompt = PromptTemplate(
         input_variables=["resume", "jd", "match_score"],
-        template="""Based on the resume and job description provided, generate a brief hiring recommendation:
+        template="""Generate a brief hiring recommendation based on this data:
 
 Resume Summary:
 {resume}
@@ -174,14 +263,14 @@ Resume Summary:
 Job Description:
 {jd}
 
-Match Score: {match_score}%
+Calculated Match Score: {match_score}%
 
-Provide:
-1. Top matching qualifications (2-3 bullet points)
-2. Missing qualifications (2-3 bullet points)
-3. One-line recommendation (Proceed/Review/Not Recommended)
+Output Format:
+1. Top Qualifications (2-3 bullets)
+2. Missing Critical Skills (2-3 bullets)
+3. Verdict (One line: Proceed / Review / Reject)
 
-Keep response concise and actionable."""
+Keep it professional and concise."""
     )
     
     try:
@@ -192,145 +281,178 @@ Keep response concise and actionable."""
         ))
         return result.content
     except:
-        return "Analysis generation failed."
+        return "Analysis unavailable."
 
-# Streamlit UI
-st.markdown('<div class="header">📄 AI Resume Screening Agent</div>', unsafe_allow_html=True)
-st.markdown("*Powered by LangChain, Gemini AI & Vector Embeddings*")
-st.divider()
+# --- MAIN APP LAYOUT ---
 
-# Sidebar
+# Hero Section
+st.markdown("""
+<div class="hero-container">
+    <h1 class="main-title">ResumeAI</h1>
+    <p class="subtitle">Intelligent Candidate Screening powered by Gemini Pro & Vector Embeddings</p>
+</div>
+""", unsafe_allow_html=True)
+
+# Sidebar Configuration
 with st.sidebar:
-    st.title("Configuration")
-    st.info("📌 This agent screens resumes against job descriptions using AI embeddings and semantic matching.")
-    api_key = st.text_input("Google API Key", type="password", help="Get from https://makersuite.google.com/app/apikey")
-    # FIX 3: Removed os.environ setting. We will pass the key directly to the LLM.
+    st.image("https://cdn-icons-png.flaticon.com/512/2814/2814666.png", width=80)
+    st.title("Settings")
+    
+    default_key = os.getenv("GOOGLE_API_KEY", "")
+    api_key = st.text_input("🔑 Google API Key", value=default_key, type="password", help="Get from makersuite.google.com")
+    
+    st.markdown("---")
+    st.caption("🚀 **Performance Mode:** Cloud Embeddings Active")
+    st.caption("🛡️ **Security:** Data processed in-memory")
 
-# Main layout
-col1, col2 = st.columns(2)
+# Main Content Area - Input Section
+st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+col1, col2 = st.columns(2, gap="large")
 
 with col1:
-    st.subheader("📋 Job Description")
-    jd_source = st.radio("Input method:", ["Paste Text", "Upload PDF"], horizontal=True)
+    st.markdown('<div class="section-header">1. Job Description</div>', unsafe_allow_html=True)
+    jd_source = st.radio("Input Method:", ["Paste Text", "Upload PDF"], horizontal=True, label_visibility="collapsed")
     
+    jd_text = ""
     if jd_source == "Paste Text":
-        jd_text = st.text_area("Enter Job Description", height=250, placeholder="Paste the job description here...")
+        jd_text = st.text_area("Paste JD here...", height=200, placeholder="Paste the full job description here...")
     else:
-        jd_file = st.file_uploader("Upload Job Description PDF", type=["pdf"], key="jd_pdf")
-        jd_text = extract_text_from_pdf(jd_file) if jd_file else ""
-        if jd_text:
-            st.success(f"✓ Extracted {len(jd_text)} characters")
+        jd_file = st.file_uploader("Upload JD PDF", type=["pdf"], key="jd_pdf")
+        if jd_file:
+            jd_text = extract_text_from_pdf(jd_file)
+            st.success(f"✨ Extracted {len(jd_text)} characters")
 
 with col2:
-    st.subheader("📄 Resumes")
-    resume_files = st.file_uploader(
-        "Upload Resume PDFs",
-        type=["pdf"],
-        accept_multiple_files=True,
-        help="Upload one or multiple resume files"
-    )
-    st.caption(f"📊 {len(resume_files)} file(s) selected" if resume_files else "No files selected")
-
-st.divider()
-
-# Process button
-if st.button("🚀 Start Screening", type="primary", use_container_width=True):
-    if not jd_text:
-        st.error("❌ Please provide a job description")
-    elif not resume_files:
-        st.error("❌ Please upload at least one resume")
-    elif not api_key:
-        st.error("❌ Please provide Google API Key in sidebar")
+    st.markdown('<div class="section-header">2. Candidate Resumes</div>', unsafe_allow_html=True)
+    resume_files = st.file_uploader("Upload Resumes (PDF)", type=["pdf"], accept_multiple_files=True)
+    
+    if resume_files:
+        st.success(f"📂 {len(resume_files)} resumes ready to process")
     else:
-        st.success("✓ Processing started...")
+        st.info("Upload one or more PDF resumes to begin.")
+
+st.markdown('</div>', unsafe_allow_html=True) # End glass-card
+
+# Action Button
+col_center = st.columns([1, 2, 1])
+with col_center[1]:
+    process_btn = st.button("🚀 Analyze Candidates")
+
+# Processing Logic
+if process_btn:
+    if not api_key:
+        st.error("⚠️ Please enter your Google API Key in the sidebar.")
+    elif not jd_text:
+        st.error("⚠️ Please provide a Job Description.")
+    elif not resume_files:
+        st.error("⚠️ Please upload at least one resume.")
+    else:
+        # Progress Container
+        progress_text = "Initializing AI Agents..."
+        my_bar = st.progress(0, text=progress_text)
         
-        # Initialize LLM with user's key
-        llm = get_llm(api_key)
-        
-        # Extract job requirements
-        with st.spinner("📖 Analyzing job description..."):
+        try:
+            # Initialize Models
+            llm = ChatGoogleGenerativeAI(model="gemini-pro", google_api_key=api_key, temperature=0.0)
+            embeddings_model = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=api_key)
+            
+            # Step 1: Analyze JD
+            my_bar.progress(10, text="Analyzing Job Requirements...")
             job_req = extract_job_requirements(jd_text, llm)
-        
-        # Process resumes
-        results = []
-        progress_bar = st.progress(0)
-        
-        for idx, resume_file in enumerate(resume_files):
-            with st.spinner(f"📝 Processing {resume_file.name}..."):
+            
+            results = []
+            
+            # Step 2: Process Resumes
+            for idx, resume_file in enumerate(resume_files):
+                progress_percent = 10 + int((idx / len(resume_files)) * 80)
+                my_bar.progress(progress_percent, text=f"Screening {resume_file.name}...")
+                
+                # Extract
                 resume_text = extract_text_from_pdf(resume_file)
+                if not resume_text.strip():
+                    continue
+                    
                 candidate_info = extract_candidate_info(resume_text, llm)
-                match_score = calculate_match_score(resume_text, jd_text, candidate_info, job_req)
+                
+                # Score
+                match_score = calculate_match_score(resume_text, jd_text, candidate_info, job_req, embeddings_model)
+                
+                # Analyze
                 analysis = generate_match_analysis(resume_text, jd_text, candidate_info, job_req, match_score, llm)
                 
                 results.append({
-                    "filename": resume_file.name,
-                    "candidate_name": candidate_info.get("name", "Unknown"),
-                    "email": candidate_info.get("email", "N/A"),
-                    "experience": candidate_info.get("experience_years", "N/A"),
-                    "match_score": round(match_score, 2),
-                    "skills_match": len(set([s.lower() for s in candidate_info.get("key_skills", [])]) & set([s.lower() for s in job_req.get("required_skills", [])])),
-                    "analysis": analysis
+                    "Rank": 0,
+                    "Candidate": candidate_info.get("name", "Unknown"),
+                    "Match Score": match_score,
+                    "Email": candidate_info.get("email", "N/A"),
+                    "Experience": candidate_info.get("experience_years", "N/A"),
+                    "Skills Match": len(set([s.lower() for s in candidate_info.get("key_skills", [])]) & set([s.lower() for s in job_req.get("required_skills", [])])),
+                    "Analysis": analysis,
+                    "Filename": resume_file.name
                 })
             
-            progress_bar.progress((idx + 1) / len(resume_files))
-        
-        st.success("✓ Screening complete!")
-        
-        # Display results
-        st.subheader("📊 Screening Results")
-        
-        # Sort by match score
-        results_sorted = sorted(results, key=lambda x: x["match_score"], reverse=True)
-        
-        # Results table
-        results_df = pd.DataFrame([
-            {
-                "Rank": idx + 1,
-                "Candidate": r["candidate_name"],
-                "Email": r["email"],
-                "Experience": r["experience"],
-                "Match Score": f"{r['match_score']}%",
-                "Skills Match": r["skills_match"]
-            }
-            for idx, r in enumerate(results_sorted)
-        ])
-        
-        st.dataframe(results_df, use_container_width=True, hide_index=True)
-        
-        # Detailed analysis
-        st.subheader("🔍 Detailed Analysis")
-        for idx, result in enumerate(results_sorted, 1):
-            with st.expander(f"#{idx} {result['candidate_name']} - Score: {result['match_score']}%"):
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.write(f"**Email:** {result['email']}")
-                    st.write(f"**Experience:** {result['experience']}")
-                    st.write(f"**File:** {result['filename']}")
-                with col2:
-                    st.metric("Match Score", f"{result['match_score']}%")
-                    st.metric("Required Skills Matched", result['skills_match'])
+            my_bar.progress(100, text="Finalizing Results...")
+            
+            # Step 3: Display Results
+            if results:
+                results.sort(key=lambda x: x["Match Score"], reverse=True)
+                for i, r in enumerate(results): r["Rank"] = i + 1
                 
-                st.markdown("**Recommendation:**")
-                st.write(result['analysis'])
-        
-        # Export results
-        st.subheader("📥 Export Results")
-        csv = results_df.to_csv(index=False)
-        st.download_button(
-            label="Download Results (CSV)",
-            data=csv,
-            file_name="resume_screening_results.csv",
-            mime="text/csv"
-        )
-        
-        # Detailed JSON export
-        json_export = json.dumps(results_sorted, indent=2)
-        st.download_button(
-            label="Download Detailed Results (JSON)",
-            data=json_export,
-            file_name="resume_screening_detailed.json",
-            mime="application/json"
-        )
-
-st.divider()
-st.caption("🔐 Your data is processed locally and not stored. API calls are made to Google Gemini only.")
+                st.balloons()
+                
+                # Results Section
+                st.markdown("""
+                <div class="hero-container" style="padding: 1rem 0;">
+                    <h2 class="main-title" style="font-size: 2rem;">Analysis Results</h2>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                # Summary Metrics
+                top_candidate = results[0]
+                m1, m2, m3 = st.columns(3)
+                m1.metric("🏆 Top Candidate", top_candidate["Candidate"], f"{top_candidate['Match Score']:.1f}% Match")
+                m2.metric("👥 Candidates Processed", len(results))
+                m3.metric("⚡ Avg Match Score", f"{sum(r['Match Score'] for r in results)/len(results):.1f}%")
+                
+                # Table View
+                df = pd.DataFrame(results)
+                display_df = df[["Rank", "Candidate", "Match Score", "Experience", "Skills Match"]].copy()
+                display_df["Match Score"] = display_df["Match Score"].apply(lambda x: f"{x:.1f}%")
+                
+                st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+                st.dataframe(display_df, use_container_width=True, hide_index=True)
+                st.markdown('</div>', unsafe_allow_html=True)
+                
+                # Detailed Analysis Cards
+                st.subheader("📝 Deep Dive Analysis")
+                for res in results:
+                    score_color = "#2ecc71" if res['Match Score'] >= 70 else "#f1c40f" if res['Match Score'] >= 50 else "#e74c3c"
+                    
+                    with st.expander(f"#{res['Rank']} {res['Candidate']} - {res['Match Score']:.1f}% Match"):
+                        st.markdown(f"""
+                        <div style="padding: 10px; border-left: 5px solid {score_color}; background: #f8f9fa; border-radius: 5px;">
+                            <h4 style="margin:0; color: {score_color};">{res['Match Score']:.1f}% Match Score</h4>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                        c1, c2 = st.columns([2, 1])
+                        with c1:
+                            st.markdown("### 🤖 AI Verdict")
+                            st.info(res['Analysis'])
+                            st.markdown(f"**📧 Email:** {res['Email']}")
+                            st.markdown(f"**📄 File:** {res['Filename']}")
+                        with c2:
+                            st.metric("Skills Matched", res['Skills Match'])
+                            st.metric("Experience", res['Experience'])
+                
+                # Export
+                st.markdown("---")
+                csv = df.to_csv(index=False).encode('utf-8')
+                st.download_button("📥 Download Full Report (CSV)", csv, "screening_report.csv", "text/csv")
+                
+            else:
+                st.warning("No valid resumes found.")
+                
+        except Exception as e:
+            st.error(f"An error occurred: {str(e)}")
+            st.info("Tip: Check your API Key and connection.")
